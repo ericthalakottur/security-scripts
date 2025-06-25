@@ -5,6 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -29,25 +31,69 @@ func checkIfFileExists(filepath string) error {
 	return nil
 }
 
-func checkPathForUrl(targetUrl, wordlistPath string) error {
+func getWordlist(wordlistPath string) ([]string, error) {
 	if err := checkIfFileExists(wordlistPath); err != nil {
 		log.Error().
 			Msg("File does not exist")
-		return err
+		return nil, err
 	}
 
 	file, err := os.OpenFile(wordlistPath, os.O_RDONLY, os.ModePerm)
 	if err != nil {
 		log.Error().
 			Msg("Failed to read text file")
-		return fmt.Errorf("failed to open file")
+		return nil, fmt.Errorf("failed to open file")
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	wordlist := []string{}
+
 	for scanner.Scan() {
-		log.Debug().
-			Msgf("Checking %s", scanner.Text())
+		wordlist = append(wordlist, scanner.Text())
+	}
+
+	return wordlist, nil
+}
+
+func checkPathForUrl(targetUrl, wordlistPath string) error {
+	parsedUrl, err := url.Parse(targetUrl)
+	if err != nil {
+		log.Error().
+			Msg("Not able to Parse url")
+		return err
+	}
+
+	urlPaths, _ := getWordlist(wordlistPath)
+	for _, urlPath := range urlPaths {
+		currentUrl, err := url.JoinPath(parsedUrl.String(), urlPath)
+		if err != nil {
+			log.Error().
+				Msgf("Failed to join %q with %q", parsedUrl.String(), urlPath)
+			continue
+		}
+
+		req, err := http.NewRequest(http.MethodGet, currentUrl, nil)
+		if err != nil {
+			log.Error().
+				Msg("Failed to create request")
+			continue
+		}
+
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Error().
+				Msgf("Failed to send request to %q with error: %s", req.URL.String(), err)
+			continue
+		}
+
+		if response.StatusCode == http.StatusOK {
+			log.Info().
+				Msgf("Found: %q", urlPath)
+		} else {
+			log.Debug().
+				Msgf("Not Found: %q", urlPath)
+		}
 	}
 
 	return nil
@@ -97,6 +143,13 @@ func main() {
 		log.Fatal().
 			Msg("-wl-path or -wl-vhost is a required argument")
 		os.Exit(1)
+	}
+
+	if *vhostWordlist != "" {
+		log.Info().
+			Str("target_url", *targetUrl).
+			Msg("Testing the host for any vhost")
+		// checkForVHost(*targetUrl, *vhostWordlist)
 	}
 
 	if *pathWordlist != "" {
